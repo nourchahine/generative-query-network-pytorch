@@ -1,0 +1,82 @@
+#!/bin/bash
+#!/bin/bash
+#SBATCH --job-name=train-gqn-rooms
+#SBATCH --output=/network/scratch/c/chahinen/sbatch_out/train-gqn-rooms-%j.out
+#SBATCH --error=/network/scratch/c/chahinen/sbatch_err/train-gqn-rooms-%j.err
+#SBATCH --partition=long
+#SBATCH --gres=gpu:48gb:4
+#SBATCH --cpus-per-task=16        # MODIFIED: Request more CPUs for data loading
+#SBATCH --mem=128G                 # MODIFIED: More memory is safer with a larger batch
+#SBATCH --time=168:00:00       # Request 7 days for training
+
+# 1. SETUP
+# -------------------------
+echo "Job started on $(hostname) at $(date)"
+echo "Job ID: $SLURM_JOB_ID"
+
+# Load modules and activate Conda
+module --force purge
+module load anaconda/3
+conda activate ~/venvs/gqn_env
+echo "Conda environment activated."
+
+# --- Configuration ---
+# Use absolute paths for robustness
+PROJECT_DIR="/home/mila/c/chahinen/gqn_project/generative-query-network-pytorch"
+DATASET_NAME="rooms_free_camera_with_object_rotations"
+# This is the directory with the CONVERTED data
+SOURCE_DATA_DIR="/home/mila/c/chahinen/scratch/Data/gqndata_converted_rooms/rooms_free_camera_with_object_rotations"
+LOG_DIR="/network/scratch/c/chahinen/gqn_logs/rooms" # Persistent log directory for TensorBoard
+
+
+RESUME_ARGS=""
+# Check if the job has been restarted
+# Ensure there are spaces inside the brackets: [ SPACE ... SPACE ]
+if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+    echo "Job is being restarted (Restart count: $SLURM_RESTART_COUNT). Finding latest checkpoint..."
+    
+    LATEST_CHECKPOINT=$(ls -v "$LOG_DIR"/checkpoint_checkpoint_*.pt 2>/dev/null | tail -n 1)
+
+    if [ -f "$LATEST_CHECKPOINT" ]; then
+        echo "Found checkpoint to resume from: $LATEST_CHECKPOINT"
+        RESUME_ARGS="--resume_from $LATEST_CHECKPOINT"
+    else
+        echo "No checkpoint found. Starting from scratch."
+    fi
+fi
+
+# Create the log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
+
+# Path for data on the node's fast local disk
+DATA_PATH_ON_NODE="$SLURM_TMPDIR/$DATASET_NAME"
+
+# 2. DATA STAGING
+# -------------------------
+echo "Staging data from scratch to node-local disk..."
+echo "Source: $SOURCE_DATA_DIR"
+echo "Destination: $SLURM_TMPDIR"
+
+cp -r "$SOURCE_DATA_DIR" "$SLURM_TMPDIR/"
+echo "Data copy complete. Verifying contents:"
+ls -lR "$DATA_PATH_ON_NODE" | head -n 10 # List first 10 lines of the copied data structure
+
+# 3. EXECUTION
+# -------------------------
+echo "Starting training script..."
+cd "$PROJECT_DIR" # Change to the project directory to run the script
+
+python run-gqn.py \
+    --data_dir "$DATA_PATH_ON_NODE" \
+    --log_dir "$LOG_DIR" \
+    --data_parallel "True" \
+    --batch_size 8 \
+    --workers 6 \
+    --n_epochs 20 \
+    $RESUME_ARGS
+
+echo "Training script finished with exit code $?."
+
+# 4. END OF JOB
+# -------------------------
+echo "Job finished at $(date)"

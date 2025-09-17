@@ -30,19 +30,12 @@ def transform_viewpoint(v):
     return v_hat
 
 
-class ShepardMetzler(Dataset):
+class GQNDataset(Dataset): # RENAMED from ShepardMetzler
     """
-    Shepart Metzler mental rotation task
-    dataset. Based on the dataset provided
-    in the GQN paper. Each file is a pre-computed batch.
-    :param root_dir: location of data on disc
-    :param train: whether to use train of test set
-    :param transform: transform on images
-    :param fraction: fraction of dataset to use
-    :param target_transform: transform on viewpoints
+    GQN Dataset.
     """
-    def __init__(self, root_dir, train=True, transform=None, fraction=1.0, target_transform=transform_viewpoint):
-        super(ShepardMetzler, self).__init__()
+    def __init__(self, root_dir, train=True, transform=None, fraction=1.0, target_transform=None): # Removed default for target_transform
+        super().__init__()
         assert fraction > 0.0 and fraction <= 1.0
         prefix = "train" if train else "test"
         self.root_dir = os.path.join(root_dir, prefix)
@@ -84,3 +77,4 @@ class ShepardMetzler(Dataset):
             viewpoints = self.target_transform(viewpoints)
 
         return images, viewpoints
+

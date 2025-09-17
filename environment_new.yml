@@ -1,0 +1,47 @@
+name: gqn
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  # Core Python & CUDA
+  - python=3.10
+  - pip
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1
+
+  # Math & SciPy stack
+  - numpy
+  - scipy
+  - mkl
+  - mkl-include
+  - mkl-service
+
+  # TensorFlow (GPU build)
+  - tensorflow
+  - tensorboard
+  - protobuf
+
+  # Utilities
+  - six
+  - setuptools
+  - wheel
+  - cffi
+  - glib
+
+  # PyTorch-related
+  - pytorch-ignite
+
+  # pip-only installs
+  - pip:
+      - nvidia-ml-py
+      - nvidia-ml-py3
+      - tensorboardx
+      - tqdm
+      - matplotlib
+      - pillow
+      - pandas
+      - seaborn
+      - opencv-python

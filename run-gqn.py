@@ -6,6 +6,7 @@ in accordance to the hyperparameter settings described in
 the supplementary materials of the paper.
 """
 import random
+import os
 import math
 from argparse import ArgumentParser
 
@@ -29,6 +30,22 @@ from gqn import GenerativeQueryNetwork, partition, Annealer
 from shepardmetzler import ShepardMetzler
 #from placeholder import PlaceholderData as ShepardMetzler
 
+def collate_gqn_batches(batch):
+    """
+    Custom collate function to handle pre-batched data.
+    Takes a list of (images_batch, poses_batch) tuples and concatenates them.
+    """
+    # Each 'item' in the batch is a (images, viewpoints) tuple from a .pt.gz file
+    all_images = [item[0] for item in batch]
+    all_viewpoints = [item[1] for item in batch]
+
+    # Concatenate along the batch dimension (dimension 0)
+    images = torch.cat(all_images, dim=0)
+    viewpoints = torch.cat(all_viewpoints, dim=0)
+    print(len(images))
+    print(len(viewpoints))
+    return images, viewpoints
+
 cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if cuda else "cpu")
 
@@ -48,6 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--fraction', type=float, help='how much of the data to use', default=1.0)
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--data_parallel', type=bool, help='whether to parallelise based on data (default: False)', default=False)
+    parser.add_argument('--resume_from', type=str, default=None, help='path to checkpoint to resume training from')
     args = parser.parse_args()
 
     # Create model and optimizer
@@ -58,15 +76,23 @@ if __name__ == '__main__':
 
     # Rate annealing schemes
     sigma_scheme = Annealer(2.0, 0.7, 80000)
-    mu_scheme = Annealer(5 * 10 ** (-6), 5 * 10 ** (-6), 1.6 * 10 ** 5)
+    #mu_scheme = Annealer(5 * 10 ** (-6), 5 * 10 ** (-6), 1.6 * 10 ** 5)
+    # Increase the initial learning rate
+    mu_scheme = Annealer(5 * 10 ** (-4), 5 * 10 ** (-5), 1.6 * 10 ** 6)
 
     # Load the dataset
     train_dataset = ShepardMetzler(root_dir=args.data_dir, fraction=args.fraction)
     valid_dataset = ShepardMetzler(root_dir=args.data_dir, fraction=args.fraction, train=False)
 
+    # --- ADD THIS DEBUG LINE ---
+    print(f"[DEBUG run-gqn.py] Length of train_dataset: {len(train_dataset)}")
+    # --- END DEBUG LINE ---
     kwargs = {'num_workers': args.workers, 'pin_memory': True} if cuda else {}
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
-    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
+    # In run-gqn.py
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_gqn_batches, **kwargs)
+    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_gqn_batches, **kwargs)
+    # train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
+    # valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
 
     def step(engine, batch):
         model.train()
@@ -111,12 +137,49 @@ if __name__ == '__main__':
     RunningAverage(output_transform=lambda x: x["mu"]).attach(trainer, "mu")
     ProgressBar().attach(trainer, metric_names=metric_names)
 
+    # ADD THIS ENTIRE LOGIC BLOCK
+    if args.resume_from:
+        if os.path.exists(args.resume_from):
+            print(f"Resuming training from checkpoint: {args.resume_from}")
+            # Use map_location to ensure checkpoint is loaded to the correct device
+            checkpoint = torch.load(args.resume_from, map_location=device)
+            
+            # Create a dictionary of objects to restore
+            to_load = {
+                'trainer': trainer,
+                'model': model,
+                'optimizer': optimizer,
+                'annealers': (sigma_scheme, mu_scheme)
+            }
+            
+            # Use Ignite's utility to load all the states
+            ModelCheckpoint.load_objects(to_load=to_load, checkpoint=checkpoint)
+            print("Successfully loaded model, optimizer, annealers, and trainer state.")
+        else:
+            print(f"WARNING: Checkpoint file not found at {args.resume_from}. Starting from scratch.")
+
+
     # Model checkpointing
-    checkpoint_handler = ModelCheckpoint("./", "checkpoint", save_interval=1, n_saved=3,
-                                         require_empty=False)
-    trainer.add_event_handler(event_name=Events.EPOCH_COMPLETED, handler=checkpoint_handler,
-                              to_save={'model': model.state_dict, 'optimizer': optimizer.state_dict,
-                                       'annealers': (sigma_scheme.data, mu_scheme.data)})
+    # checkpoint_handler = ModelCheckpoint("./", "checkpoint", save_interval=1, n_saved=3,
+    #                                      require_empty=False)
+    # trainer.add_event_handler(event_name=Events.EPOCH_COMPLETED, handler=checkpoint_handler,
+    #                           to_save={'model': model.state_dict, 'optimizer': optimizer.state_dict,
+    #                                    'annealers': (sigma_scheme.data, mu_scheme.data)})
+
+    # Model checkpointing
+    # Save checkpoints to the same log directory for better organization
+    checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3,require_empty=False)
+    # Add the handler to the trainer
+    trainer.add_event_handler(
+        event_name=Events.EPOCH_COMPLETED,
+        handler=checkpoint_handler,
+        to_save={
+            'trainer':trainer,
+            'model': model,
+            'optimizer': optimizer,
+            'annealers': (sigma_scheme, mu_scheme)
+        }
+    )
 
     timer = Timer(average=True).attach(trainer, start=Events.EPOCH_STARTED, resume=Events.ITERATION_STARTED,
                  pause=Events.ITERATION_COMPLETED, step=Events.ITERATION_COMPLETED)

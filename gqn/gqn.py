@@ -25,6 +25,8 @@ class GenerativeQueryNetwork(nn.Module):
 
         self.generator = GeneratorNetwork(x_dim, v_dim, r_dim, z_dim, h_dim, L)
         self.representation = TowerRepresentation(x_dim, v_dim, r_dim, pool=True)
+        
+
 
     def forward(self, context_x, context_v, query_x, query_v):
         """
