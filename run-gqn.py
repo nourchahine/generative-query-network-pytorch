@@ -137,49 +137,90 @@ if __name__ == '__main__':
     RunningAverage(output_transform=lambda x: x["mu"]).attach(trainer, "mu")
     ProgressBar().attach(trainer, metric_names=metric_names)
 
-    # ADD THIS ENTIRE LOGIC BLOCK
+    # --- CHECKPOINTING FIX STARTS HERE ---
+
+    # Define what to save. The Annealer objects are custom.
+    to_save = {
+        'trainer': trainer,
+        'model': model,
+        'optimizer': optimizer,
+        'annealers': (sigma_scheme, mu_scheme)
+    }
+
     if args.resume_from:
         if os.path.exists(args.resume_from):
             print(f"Resuming training from checkpoint: {args.resume_from}")
-            # Use map_location to ensure checkpoint is loaded to the correct device
             checkpoint = torch.load(args.resume_from, map_location=device)
             
-            # Create a dictionary of objects to restore
-            to_load = {
-                'trainer': trainer,
-                'model': model,
-                'optimizer': optimizer,
-                'annealers': (sigma_scheme, mu_scheme)
-            }
-            
-            # Use Ignite's utility to load all the states
-            ModelCheckpoint.load_objects(to_load=to_load, checkpoint=checkpoint)
-            print("Successfully loaded model, optimizer, annealers, and trainer state.")
+            # 1. Manually load the state of the custom Annealer objects
+            # The saved state is a tuple of dictionaries
+            annealer_states = checkpoint.pop('annealers', None)
+            if annealer_states:
+                sigma_scheme.__dict__.update(annealer_states[0])
+                mu_scheme.__dict__.update(annealer_states[1])
+                print("Successfully loaded annealer states.")
+
+            # 2. Use Ignite to load the rest (it knows how to handle model, optimizer, etc.)
+            ModelCheckpoint.load_objects(to_load=to_save, checkpoint=checkpoint)
+            print("Successfully loaded model, optimizer, and trainer state.")
         else:
             print(f"WARNING: Checkpoint file not found at {args.resume_from}. Starting from scratch.")
 
-
-    # Model checkpointing
-    # checkpoint_handler = ModelCheckpoint("./", "checkpoint", save_interval=1, n_saved=3,
-    #                                      require_empty=False)
-    # trainer.add_event_handler(event_name=Events.EPOCH_COMPLETED, handler=checkpoint_handler,
-    #                           to_save={'model': model.state_dict, 'optimizer': optimizer.state_dict,
-    #                                    'annealers': (sigma_scheme.data, mu_scheme.data)})
-
-    # Model checkpointing
-    # Save checkpoints to the same log directory for better organization
-    checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3,require_empty=False)
-    # Add the handler to the trainer
+    # Model checkpointing handler
+    checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3, require_empty=False)
+    
+    # In the saving handler, we need to save the annealers' internal state (.data)
+    # The Annealer class has a __repr__ that returns its internal dictionary
     trainer.add_event_handler(
         event_name=Events.EPOCH_COMPLETED,
         handler=checkpoint_handler,
         to_save={
-            'trainer':trainer,
+            'trainer': trainer,
             'model': model,
             'optimizer': optimizer,
-            'annealers': (sigma_scheme, mu_scheme)
+            'annealers': (sigma_scheme.data, mu_scheme.data) # <-- Save the state dict
         }
     )
+    
+    # --- CHECKPOINTING FIX ENDS HERE ---
+
+    # # ADD THIS ENTIRE LOGIC BLOCK
+    # if args.resume_from:
+    #     if os.path.exists(args.resume_from):
+    #         print(f"Resuming training from checkpoint: {args.resume_from}")
+    #         # Use map_location to ensure checkpoint is loaded to the correct device
+    #         checkpoint = torch.load(args.resume_from, map_location=device)
+            
+    #         # Create a dictionary of objects to restore
+    #         to_load = {
+    #             'trainer': trainer,
+    #             'model': model,
+    #             'optimizer': optimizer,
+    #             'annealers': (sigma_scheme, mu_scheme)
+    #         }
+            
+    #         # Use Ignite's utility to load all the states
+    #         ModelCheckpoint.load_objects(to_load=to_load, checkpoint=checkpoint)
+    #         print("Successfully loaded model, optimizer, annealers, and trainer state.")
+    #     else:
+    #         print(f"WARNING: Checkpoint file not found at {args.resume_from}. Starting from scratch.")
+
+
+    
+    # # Model checkpointing
+    # # Save checkpoints to the same log directory for better organization
+    # checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3,require_empty=False)
+    # # Add the handler to the trainer
+    # trainer.add_event_handler(
+    #     event_name=Events.EPOCH_COMPLETED,
+    #     handler=checkpoint_handler,
+    #     to_save={
+    #         'trainer':trainer,
+    #         'model': model,
+    #         'optimizer': optimizer,
+    #         'annealers': (sigma_scheme, mu_scheme)
+    #     }
+    # )
 
     timer = Timer(average=True).attach(trainer, start=Events.EPOCH_STARTED, resume=Events.ITERATION_STARTED,
                  pause=Events.ITERATION_COMPLETED, step=Events.ITERATION_COMPLETED)

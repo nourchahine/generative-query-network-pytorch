@@ -29,20 +29,39 @@ SOURCE_DATA_DIR="/home/mila/c/chahinen/scratch/Data/gqndata_converted/tmp/$DATAS
 LOG_DIR="/network/scratch/c/chahinen/gqn_logs" # Persistent log directory for TensorBoard
 
 
-RESUME_ARGS=""
-# Check if the job has been restarted
-# Ensure there are spaces inside the brackets: [ SPACE ... SPACE ]
-if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
-    echo "Job is being restarted (Restart count: $SLURM_RESTART_COUNT). Finding latest checkpoint..."
+# RESUME_ARGS=""
+# # Check if the job has been restarted
+# # Ensure there are spaces inside the brackets: [ SPACE ... SPACE ]
+# if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+#     echo "Job is being restarted (Restart count: $SLURM_RESTART_COUNT). Finding latest checkpoint..."
     
-    LATEST_CHECKPOINT=$(ls -v "$LOG_DIR"/checkpoint_checkpoint_*.pt 2>/dev/null | tail -n 1)
+#     LATEST_CHECKPOINT=$(ls -v "$LOG_DIR"/checkpoint_checkpoint_*.pt 2>/dev/null | tail -n 1)
 
-    if [ -f "$LATEST_CHECKPOINT" ]; then
-        echo "Found checkpoint to resume from: $LATEST_CHECKPOINT"
-        RESUME_ARGS="--resume_from $LATEST_CHECKPOINT"
-    else
-        echo "No checkpoint found. Starting from scratch."
-    fi
+#     if [ -f "$LATEST_CHECKPOINT" ]; then
+#         echo "Found checkpoint to resume from: $LATEST_CHECKPOINT"
+#         RESUME_ARGS="--resume_from $LATEST_CHECKPOINT"
+#     else
+#         echo "No checkpoint found. Starting from scratch."
+#     fi
+# fi
+
+# In your sbatch script
+
+RESUME_ARGS=""
+# --- MODIFIED: Always check for a checkpoint ---
+echo "Searching for the latest checkpoint to resume from..."
+
+# Find the checkpoint file with the highest version number
+LATEST_CHECKPOINT=$(ls -v "$LOG_DIR"/checkpoint_checkpoint_*.pt 2>/dev/null | tail -n 1)
+
+# Check if a checkpoint file was actually found
+if [ -f "$LATEST_CHECKPOINT" ]; then
+    echo "Found checkpoint to resume from: $LATEST_CHECKPOINT"
+    # Set the argument for the python script
+    RESUME_ARGS="--resume_from $LATEST_CHECKPOINT"
+else
+    # If no checkpoint is found, start from scratch
+    echo "No checkpoint found. Starting from scratch."
 fi
 
 # Create the log directory if it doesn't exist

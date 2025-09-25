@@ -1,6 +1,6 @@
 #!/bin/bash
 #!/bin/bash
-#SBATCH --job-name=train-gqn-rooms
+#SBATCH --job-name=train-gqn-rooms-16
 #SBATCH --output=/network/scratch/c/chahinen/sbatch_out/train-gqn-rooms-%j.out
 #SBATCH --error=/network/scratch/c/chahinen/sbatch_err/train-gqn-rooms-%j.err
 #SBATCH --partition=long
@@ -26,7 +26,7 @@ PROJECT_DIR="/home/mila/c/chahinen/gqn_project/generative-query-network-pytorch"
 DATASET_NAME="rooms_free_camera_with_object_rotations"
 # This is the directory with the CONVERTED data
 SOURCE_DATA_DIR="/home/mila/c/chahinen/scratch/Data/gqndata_converted_rooms/rooms_free_camera_with_object_rotations"
-LOG_DIR="/network/scratch/c/chahinen/gqn_logs/rooms" # Persistent log directory for TensorBoard
+LOG_DIR="/network/scratch/c/chahinen/gqn_logs/rooms_batch16" # Persistent log directory for TensorBoard
 
 
 RESUME_ARGS=""
@@ -70,7 +70,7 @@ python run-gqn.py \
     --data_dir "$DATA_PATH_ON_NODE" \
     --log_dir "$LOG_DIR" \
     --data_parallel "True" \
-    --batch_size 8 \
+    --batch_size 16 \
     --workers 6 \
     --n_epochs 20 \
     $RESUME_ARGS
