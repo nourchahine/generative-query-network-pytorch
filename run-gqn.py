@@ -25,6 +25,7 @@ from ignite.contrib.handlers import ProgressBar
 from ignite.engine import Engine, Events
 from ignite.handlers import ModelCheckpoint, Timer
 from ignite.metrics import RunningAverage
+from ignite.handlers import EarlyStopping
 
 from gqn import GenerativeQueryNetwork, partition, Annealer
 from shepardmetzler import ShepardMetzler
@@ -75,7 +76,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=5 * 10 ** (-5))
 
     # Rate annealing schemes
-    sigma_scheme = Annealer(2.0, 0.7, 80000)
+    sigma_scheme = Annealer(2.0, 0.7, 200000)
     #mu_scheme = Annealer(5 * 10 ** (-6), 5 * 10 ** (-6), 1.6 * 10 ** 5)
     # Increase the initial learning rate
     mu_scheme = Annealer(5 * 10 ** (-4), 5 * 10 ** (-5), 1.6 * 10 ** 6)
@@ -137,14 +138,15 @@ if __name__ == '__main__':
     RunningAverage(output_transform=lambda x: x["mu"]).attach(trainer, "mu")
     ProgressBar().attach(trainer, metric_names=metric_names)
 
+
     # --- CHECKPOINTING FIX STARTS HERE ---
 
-    # Define what to save. The Annealer objects are custom.
-    to_save = {
+    # Define the objects that Ignite will handle automatically.
+    # Notice 'annealers' is NOT included here.
+    to_load = {
         'trainer': trainer,
         'model': model,
-        'optimizer': optimizer,
-        'annealers': (sigma_scheme, mu_scheme)
+        'optimizer': optimizer
     }
 
     if args.resume_from:
@@ -152,35 +154,97 @@ if __name__ == '__main__':
             print(f"Resuming training from checkpoint: {args.resume_from}")
             checkpoint = torch.load(args.resume_from, map_location=device)
             
-            # 1. Manually load the state of the custom Annealer objects
-            # The saved state is a tuple of dictionaries
+            # 1. Manually load the state of the custom Annealer objects first.
+            #    The .pop() method removes the key so Ignite doesn't see it.
             annealer_states = checkpoint.pop('annealers', None)
             if annealer_states:
                 sigma_scheme.__dict__.update(annealer_states[0])
                 mu_scheme.__dict__.update(annealer_states[1])
                 print("Successfully loaded annealer states.")
 
-            # 2. Use Ignite to load the rest (it knows how to handle model, optimizer, etc.)
-            ModelCheckpoint.load_objects(to_load=to_save, checkpoint=checkpoint)
+            # 2. Use Ignite to load the rest. It will only find keys for the
+            #    model, optimizer, and trainer now.
+            ModelCheckpoint.load_objects(to_load=to_load, checkpoint=checkpoint)
             print("Successfully loaded model, optimizer, and trainer state.")
         else:
             print(f"WARNING: Checkpoint file not found at {args.resume_from}. Starting from scratch.")
 
-    # Model checkpointing handler
+
+    # --- SAVING LOGIC ---
+
+    # 1. Create the standard checkpoint handler from Ignite.
     checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3, require_empty=False)
-    
-    # In the saving handler, we need to save the annealers' internal state (.data)
-    # The Annealer class has a __repr__ that returns its internal dictionary
+
+    # 2. Add the handler to the trainer to save ONLY the standard objects.
     trainer.add_event_handler(
         event_name=Events.EPOCH_COMPLETED,
         handler=checkpoint_handler,
-        to_save={
-            'trainer': trainer,
-            'model': model,
-            'optimizer': optimizer,
-            'annealers': (sigma_scheme.data, mu_scheme.data) # <-- Save the state dict
-        }
+        to_save=to_load  # Use the same dictionary we defined for loading
     )
+
+    # 3. Add a SECOND handler that runs after the first one to manually
+    #    add the annealer data to the checkpoint file.
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def save_annealers_handler(engine):
+        # Get the path of the file that checkpoint_handler just saved
+        last_checkpoint_path = checkpoint_handler.last_checkpoint
+        if last_checkpoint_path and os.path.exists(last_checkpoint_path):
+            # Load the checkpoint into memory
+            checkpoint = torch.load(last_checkpoint_path, map_location='cpu')
+            
+            # Add our custom data
+            checkpoint['annealers'] = (sigma_scheme.data, mu_scheme.data)
+            
+            # Save the modified checkpoint back to the same file
+            torch.save(checkpoint, last_checkpoint_path)
+
+    # --- CHECKPOINTING FIX ENDS HERE ---
+
+    
+    # # --- CHECKPOINTING FIX STARTS HERE ---
+
+    # # Define what to save. The Annealer objects are custom.
+    # to_save = {
+    #     'trainer': trainer,
+    #     'model': model,
+    #     'optimizer': optimizer,
+    #     'annealers': (sigma_scheme, mu_scheme)
+    # }
+
+    # if args.resume_from:
+    #     if os.path.exists(args.resume_from):
+    #         print(f"Resuming training from checkpoint: {args.resume_from}")
+    #         checkpoint = torch.load(args.resume_from, map_location=device)
+            
+    #         # 1. Manually load the state of the custom Annealer objects
+    #         # The saved state is a tuple of dictionaries
+    #         annealer_states = checkpoint.pop('annealers', None)
+    #         if annealer_states:
+    #             sigma_scheme.__dict__.update(annealer_states[0])
+    #             mu_scheme.__dict__.update(annealer_states[1])
+    #             print("Successfully loaded annealer states.")
+
+    #         # 2. Use Ignite to load the rest (it knows how to handle model, optimizer, etc.)
+    #         ModelCheckpoint.load_objects(to_load=to_save, checkpoint=checkpoint)
+    #         print("Successfully loaded model, optimizer, and trainer state.")
+    #     else:
+    #         print(f"WARNING: Checkpoint file not found at {args.resume_from}. Starting from scratch.")
+
+    # # Model checkpointing handler
+    # checkpoint_handler = ModelCheckpoint(args.log_dir, "checkpoint", n_saved=3, require_empty=False)
+    
+    # # In the saving handler, we need to save the annealers' internal state (.data)
+    # # The Annealer class has a __repr__ that returns its internal dictionary
+    # trainer.add_event_handler(
+    #     event_name=Events.EPOCH_COMPLETED,
+    #     handler=checkpoint_handler,
+    #     to_save={
+    #         'trainer': trainer,
+    #         'model': model,
+    #         'optimizer': optimizer,
+    #         'annealers': (sigma_scheme.data, mu_scheme.data) # <-- Save the state dict
+    #     }
+    # )
     
     # --- CHECKPOINTING FIX ENDS HERE ---
 
@@ -250,29 +314,80 @@ if __name__ == '__main__':
 
             writer.add_image("representation", make_grid(r), engine.state.epoch)
             writer.add_image("reconstruction", make_grid(x_mu), engine.state.epoch)
+        # --- Validation, Early Stopping, and Best Model Saving (End of Epoch) ---
 
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def validate(engine):
+    # Create a separate Ignite engine for validation
+    def validation_step(engine, batch):
         model.eval()
         with torch.no_grad():
-            x, v = next(iter(valid_loader))
+            x, v = batch
             x, v = x.to(device), v.to(device)
             x, v, x_q, v_q = partition(x, v)
-
-            # Reconstruction, representation and divergence
             x_mu, _, kl = model(x, v, x_q, v_q)
-
-            # Validate at last sigma
             ll = Normal(x_mu, sigma_scheme.recent).log_prob(x_q)
-
             likelihood = torch.mean(torch.sum(ll, dim=[1, 2, 3]))
             kl_divergence = torch.mean(torch.sum(kl, dim=[1, 2, 3]))
-
-            # Evidence lower bound
             elbo = likelihood - kl_divergence
+            return {"elbo": elbo.item(), "kl": kl_divergence.item()}
 
-            writer.add_scalar("validation/elbo", elbo.item(), engine.state.epoch)
-            writer.add_scalar("validation/kl", kl_divergence.item(), engine.state.epoch)
+    validator = Engine(validation_step)
+    RunningAverage(output_transform=lambda x: x["elbo"]).attach(validator, "elbo")
+    RunningAverage(output_transform=lambda x: x["kl"]).attach(validator, "kl")
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def run_validation_and_save_best(engine):
+        validator.run(valid_loader)
+        metrics = validator.state.metrics
+        writer.add_scalar("validation/elbo", metrics["elbo"], engine.state.epoch)
+        writer.add_scalar("validation/kl", metrics["kl"], engine.state.epoch)
+        print(f"\n--- Validation Results - Epoch: {engine.state.epoch} ---")
+        print(f"ELBO: {metrics['elbo']:.4f} | KL: {metrics['kl']:.4f}\n")
+
+    # Define the score function for early stopping and best model saving
+    def score_function(engine):
+        return engine.state.metrics["elbo"]
+
+    # Set up EarlyStopping
+    early_stopping_handler = EarlyStopping(patience=10, score_function=score_function, trainer=trainer)
+    validator.add_event_handler(Events.COMPLETED, early_stopping_handler)
+
+    # Set up the handler to save only the single BEST model
+    best_model_handler = ModelCheckpoint(
+        args.log_dir,
+        filename_prefix="best_model",
+        n_saved=1,
+        create_dir=True,
+        require_empty=False,
+        score_function=score_function,
+        score_name="val_elbo"
+    )
+    validator.add_event_handler(Events.COMPLETED, best_model_handler, {'model': model})
+
+    # =================================================================================
+    # ==> END of the new block
+    # =================================================================================
+    # @trainer.on(Events.EPOCH_COMPLETED)
+    # def validate(engine):
+    #     model.eval()
+    #     with torch.no_grad():
+    #         x, v = next(iter(valid_loader))
+    #         x, v = x.to(device), v.to(device)
+    #         x, v, x_q, v_q = partition(x, v)
+
+    #         # Reconstruction, representation and divergence
+    #         x_mu, _, kl = model(x, v, x_q, v_q)
+
+    #         # Validate at last sigma
+    #         ll = Normal(x_mu, sigma_scheme.recent).log_prob(x_q)
+
+    #         likelihood = torch.mean(torch.sum(ll, dim=[1, 2, 3]))
+    #         kl_divergence = torch.mean(torch.sum(kl, dim=[1, 2, 3]))
+
+    #         # Evidence lower bound
+    #         elbo = likelihood - kl_divergence
+
+    #         writer.add_scalar("validation/elbo", elbo.item(), engine.state.epoch)
+    #         writer.add_scalar("validation/kl", kl_divergence.item(), engine.state.epoch)
 
     @trainer.on(Events.EXCEPTION_RAISED)
     def handle_exception(engine, e):
