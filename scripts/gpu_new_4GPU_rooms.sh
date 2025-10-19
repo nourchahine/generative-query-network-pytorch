@@ -70,7 +70,7 @@ python run-gqn.py \
     --data_dir "$DATA_PATH_ON_NODE" \
     --log_dir "$LOG_DIR" \
     --data_parallel "True" \
-    --batch_size 16 \
+    --batch_size 1 \
     --workers 6 \
     --n_epochs 20 \
     $RESUME_ARGS

@@ -62,7 +62,7 @@ python run-gqn.py \
     --data_dir "$SOURCE_DATA_DIR" \
     --log_dir "$LOG_DIR" \
     --data_parallel "True" \
-    --batch_size 16 \
+    --batch_size 1 \
     --workers 6 \
     --n_epochs 10 \
     $RESUME_ARGS
